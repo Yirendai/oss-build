@@ -1,0 +1,349 @@
+// see: https://docs.gradle.org/current/userguide/init_scripts.html
+// see: http://blog.csdn.net/sbsujjbcy/article/details/52079413
+
+initscript {
+  repositories {
+    jcenter()
+    maven { url 'https://plugins.gradle.org/m2/' }
+    maven { url 'https://raw.github.com/chshawkn/maven-settings-decoder/mvn-repo/' }
+  }
+  dependencies {
+    // Add dependency for build script, so we can access maven's settings.xml from our build script.
+    classpath 'cn.home1.tools:maven-settings-decoder:1.0.0.OSS'
+    classpath 'org.ajoberstar:grgit:1.7.0'
+    // Add dependency for build script, so we can access Git from our build script.
+  }
+}
+
+allprojects {
+  // execute after settings.gradle
+  println "init.gradle allprojects ${project.name}"
+
+  if (rootProject.name == project.name) {
+    def dotGit = new File(".git");
+    if (dotGit.exists() && dotGit.isDirectory()) {
+      //ext.git = org.ajoberstar.grgit.Grgit.open(file('.')) // Open the Git repository in the current directory.
+      ext.git = org.ajoberstar.grgit.Grgit.open(dir: '.')
+      ext.branch = git.branch.current.name
+      ext.revision = git.head().id // Get commit id of HEAD, Alternative is revision = git.head().abbreviatedId.
+    } else {
+      ext.branch = "unknown"
+      ext.revision = "unknown"
+    }
+
+    rootProject.version = "${projectVersion}"
+    //rootProject.version = "${projectVersion}.${git.head().abbreviatedId}"
+    ext.version = rootProject.version
+
+    if (project.hasProperty('infrastructure')) {
+      ext.infrastructure = project.getProperty('infrastructure')
+    } else if (System.getProperty("infrastructure")) {
+      ext.infrastructure = System.getProperty("infrastructure")
+    } else {
+      ext.infrastructure = 'local'
+    }
+
+    def envMavenOpts = System.getenv("MAVEN_OPTS")
+    if (envMavenOpts) {
+      def mirror = envMavenOpts.find("-D${ext.infrastructure}-nexus\\.mirror=([^\\s]+)").replace("-D${ext.infrastructure}-nexus.mirror=", "")
+      def repositories = envMavenOpts.find("-D${ext.infrastructure}-nexus\\.repositories=([^\\s]+)").replace("-D${ext.infrastructure}-nexus.repositories=", "")
+      ext.nexusMirror = mirror ? mirror : 'http://nexus.local:28081/nexus/repository/maven-public/'
+      ext.nexusRepositories = repositories ? repositories : 'http://nexus.local:28081/nexus/repository'
+    } else {
+      ext.nexusMirror = 'http://nexus.local:28081/nexus/repository/maven-public/'
+      ext.nexusRepositories = 'http://nexus.local:28081/nexus/repository'
+    }
+
+    if (project.hasProperty('settings') && project.hasProperty('settings.security')) {
+      ext.settingsFileOpt = project.getProperty('settings')
+      ext.securityFileOpt = project.getProperty('settings.security')
+      ext.mavenSettings = new cn.home1.tools.maven.SettingsDecoder(ext.settingsFileOpt, ext.securityFileOpt, false)
+    } else {
+      ext.settingsFileOpt = ""
+      ext.securityFileOpt = ""
+      ext.mavenSettings = new cn.home1.tools.maven.SettingsDecoder()
+    }
+    ext.repositoryReleasesUser = ext.mavenSettings.getText("//server[id='${ext.infrastructure}-nexus-releases']/username/text()")
+    ext.repositoryReleasesPass = ext.mavenSettings.getText("//server[id='${ext.infrastructure}-nexus-releases']/password/text()")
+    ext.repositorySnapshotsUser = ext.mavenSettings.getText("//server[id='${ext.infrastructure}-nexus-snapshots']/username/text()")
+    ext.repositorySnapshotsPass = ext.mavenSettings.getText("//server[id='${ext.infrastructure}-nexus-snapshots']/password/text()")
+
+    if (project.hasProperty('testFailureIgnore')) {
+      ext.testFailureIgnore = project.getProperty('testFailureIgnore')
+    } else if (System.getProperty("testFailureIgnore")) {
+      ext.testFailureIgnore = System.getProperty("testFailureIgnore")
+    } else {
+      ext.testFailureIgnore = "false"
+    }
+
+    println ""
+    println "--------------------------------------------------------------------------------"
+    println "branch: " + ext.branch
+    println "infrastructure: " + ext.infrastructure
+    println "nexusMirror: " + ext.nexusMirror
+    println "nexusRepositories: " + ext.nexusRepositories
+    println "revision: " + ext.revision
+    println "settingsFileOpt: " + ext.settingsFileOpt + ", securityFileOpt: " + ext.securityFileOpt
+    println "${ext.infrastructure}-nexus-releases username: " + ext.mavenSettings.getText("//server[id='${ext.infrastructure}-nexus-releases']/username/text()")
+    println "${ext.infrastructure}-nexus-snapshots username: " + ext.mavenSettings.getText("//server[id='${ext.infrastructure}-nexus-snapshots']/username/text()")
+    if ( gradle.ext.springBootApi && gradle.ext.springBootVersion ) {
+      ext.springBootApi = gradle.ext.springBootApi
+      ext.springBootVersion = gradle.ext.springBootVersion
+      println "springBootApi: " + ext.springBootApi
+      println "springBootVersion: " + ext.springBootVersion
+    }
+    println "testFailureIgnore: " + ext.testFailureIgnore
+    println "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+  }
+
+  repositories {
+    mavenLocal()
+    //maven { url 'file://' + new File(System.getProperty('user.home'), '.m2/repository').absolutePath
+    if (nexusMirror?.trim()) {
+      println "proxy repositories using: ${infrastructure} ${nexusMirror}"
+      maven { url "${nexusMirror}" }
+    }
+    mavenCentral()
+    maven { url 'http://repo.spring.io/libs-release' }
+    maven { url 'http://repo.spring.io/libs-milestone' }
+    maven { url 'http://repo.spring.io/libs-snapshot' }
+    maven { url 'http://repo.spring.io/release' }
+    maven { url 'http://repo.spring.io/milestone' }
+    maven { url 'http://repo.spring.io/snapshot' }
+  }
+
+//  apply plugin: 'maven'
+//  configure(install.repositories.mavenInstaller) {
+//    pom.project {
+//      packaging 'jar'
+//    }
+//  }
+
+  apply plugin: 'eclipse'
+  eclipse {
+    classpath {
+      downloadSources = true
+    }
+  }
+
+  apply plugin: 'idea'
+  idea {
+    module {// see .gitignore
+      excludeDirs += [
+        file('bin'),
+        file('build'),
+        file('logs'),
+        file('data'),
+        file('target'),
+        file('node_modules')
+      ]
+      downloadSources = true
+
+//      // Configuring Spring Loaded for use with Gradle and IntelliJ
+//      inheritOutputDirs = false
+//      outputDir = file("$buildDir/classes/main/")
+//
+//      iml {
+//        beforeMerged { module ->
+//          module.excludeFolders.clear()
+//        }
+//        whenMerged { module ->
+//          module.excludeFolders.clear()
+//        }
+//      }
+    }
+  }
+
+  subprojects {
+    println "init.gradle allprojects ${project.name}"
+
+    project.version = rootProject.version
+
+    apply plugin: 'java'
+
+    // see: https://docs.gradle.org/current/userguide/maven_plugin.html
+    apply plugin: 'maven'
+    install {
+      repositories.mavenInstaller {
+        pom.version = "${project.version}"
+        pom.artifactId = "${project.name}"
+        if ( "${springBootVersion}" ) {
+          pom.artifactId = "${project.name}-spring-boot-${springBootVersion}"
+        }
+      }
+    }
+    if (nexusRepositories?.trim()) {
+      if ('local'.equals(infrastructure)) {
+        uploadArchives {
+          repositories {
+            mavenDeployer {
+              // For *-SNAPSHOT versions the snapshotRepository is used. Otherwise the releases repo is used.
+              repository(url: "${nexusRepositories}/maven-releases/") {
+                authentication(userName: "${repositoryReleasesUser}", password: "${repositoryReleasesPass}")
+              }
+              snapshotRepository(url: "${nexusRepositories}/maven-snapshots/") {
+                authentication(userName: "${repositorySnapshotsUser}", password: "${repositorySnapshotsPass}")
+              }
+              pom.version = "${project.version}"
+              pom.artifactId = "${project.name}"
+              if ( "${springBootVersion}" ) {
+                pom.artifactId = "${project.name}-spring-boot-${springBootVersion}"
+              }
+            }
+          }
+        }
+      } else {
+        uploadArchives {
+          repositories {
+            mavenDeployer {
+              // For *-SNAPSHOT versions the snapshotRepository is used. Otherwise the releases repo is used.
+              repository(url: "${nexusRepositories}/releases/") {
+                authentication(userName: "${repositoryReleasesUser}", password: "${repositoryReleasesPass}")
+              }
+              snapshotRepository(url: "${nexusRepositories}/snapshots/") {
+                authentication(userName: "${repositorySnapshotsUser}", password: "${repositorySnapshotsPass}")
+              }
+              pom.version = "${project.version}"
+              pom.artifactId = "${project.name}"
+              if ( "${springBootVersion}" ) {
+                pom.artifactId = "${project.name}-spring-boot-${springBootVersion}"
+              }
+            }
+          }
+        }
+      }
+    }
+
+    sourceSets {
+      main {
+        java {
+          srcDirs = ['src/main/java']
+          if ( "${springBootVersion}" ) {
+            srcDir "src/main/java-spring-boot-${springBootVersion}"
+          }
+        }
+        resources {
+          srcDirs = ['src/main/resources']
+          includes = ["**/*"]
+        }
+      }
+      test {
+        java {
+          srcDirs = ['src/test/java']
+          if ( "${springBootVersion}" ) {
+            srcDir "src/test/java-spring-boot-${springBootVersion}"
+          }
+        }
+        resources {
+          srcDirs = ['src/test/resources']
+        }
+      }
+    }
+
+    //jar {
+      // use artifactId instead of classifier
+      //classifier = "spring-boot-${springBootVersion}"
+    //}
+
+    javadoc {
+      failOnError = false
+    }
+    task sourcesJar(type: Jar, dependsOn: classes) {
+      classifier = 'sources'
+      from sourceSets.main.allSource
+    }
+    task javadocJar(type: Jar, dependsOn: javadoc) {
+      classifier = 'javadoc'
+      from javadoc.destinationDir
+    }
+    artifacts {
+      archives sourcesJar
+      archives(javadocJar) {
+        type = 'javadoc'
+      }
+    }
+
+    compileJava {
+      sourceCompatibility = JavaVersion.VERSION_1_8
+      targetCompatibility = JavaVersion.VERSION_1_8
+      options.compilerArgs << '-Xlint:unchecked' << '-Xlint:deprecation' << '-parameters'
+    }
+    compileJava.options.encoding = 'UTF-8'
+    compileJava.dependsOn(processResources)
+    compileTestJava.options.encoding = 'UTF-8'
+    compileTestJava.options.compilerArgs << '-Xlint:unchecked' << '-Xlint:deprecation' << '-parameters'
+
+    if ( "${jacocoVersion}" ) {
+      apply plugin: 'jacoco'
+      jacoco {
+        toolVersion = "${jacocoVersion}"
+        //reportsDir = file("$buildDir/reports/jacoco")
+      }
+      jacocoTestReport {
+        reports {
+          xml.enabled false
+          csv.enabled false
+          //html.destination "${buildDir}/jacocoHtml"
+        }
+      }
+    }
+
+    test {
+      // see: https://www.mkyong.com/gradle/gradle-how-to-continue-build-if-test-is-failed/
+      ignoreFailures = "${testFailureIgnore}".toBoolean()
+      if ( "${jacocoVersion}" ) {
+        jacoco {
+          // @FeignClient problem. Method $jacocoInit not annotated with HTTP method type
+          excludes = ["cn.home1.commons.*Client"]
+        }
+      }
+      // show standard out and standard error of the test JVM(s) on the console, without this
+      // the text output printed by the tests won't show.
+      // ref: https://docs.gradle.org/current/dsl/org.gradle.api.tasks.testing.Test.html
+      testLogging.showStandardStreams = false
+      def testCount = 0
+      afterTest { descriptor, result ->
+        // descriptor is of type TestDescriptor, result is of type TestResult
+        // ref: https://docs.gradle.org/current/javadoc/org/gradle/api/tasks/testing/TestDescriptor.html
+        // ref: https://docs.gradle.org/current/javadoc/org/gradle/api/tasks/testing/TestResult.html
+        logger.lifecycle("Test {count: ${++testCount} name: $descriptor result: $result.resultType}")
+      }
+      useJUnit {
+        exclude '**/*IT.class'
+      }
+    }
+
+    task integrationTest(type: Test) {
+      ignoreFailures = "${testFailureIgnore}".toBoolean()
+      testLogging.showStandardStreams = false
+      def testCount = 0
+      afterTest { descriptor, result ->
+        logger.lifecycle("IntegrationTest {count: ${++testCount} name: $descriptor.name result: $result.resultType}")
+      }
+      useJUnit {
+        include '**/*IT.class'
+      }
+    }
+    //check.dependsOn -= integrationTest
+  }
+
+  //task version << {
+  task version {
+    doLast {
+      logging.captureStandardOutput LogLevel.QUIET
+      logging.captureStandardError LogLevel.ERROR
+      logger.quiet("name:" + project.name)
+      logger.quiet("version:" + project.version)
+      logger.quiet("revision:" + revision)
+      if ( "${springBootVersion}" && "${springBootApi}" ) {
+        logger.quiet("spring-boot_version:" + springBootVersion)
+        logger.quiet("spring-boot_api:" + springBootApi)
+      }
+      logging.captureStandardOutput LogLevel.INFO
+    }
+  }
+
+  if (rootProject.name == project.name && "${gradleVersion}" ) {
+    task wrapper(type: Wrapper) { gradleVersion = "${gradleVersion}" }
+  }
+}

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+# usage:
+# git version >= 2.9
+# git config --local core.hooksPath hooks
+
+JIRA_API_ISSUE_URL="${JIRA}/rest/api/latest/issue/"
+echo "JIRA_API_ISSUE_URL: ${JIRA_API_ISSUE_URL}"
+HARD_MODE="true"
+TIME_OUT=10
+
+if  grep -iq 'merge\|feature branch' "$1" ;then
+    # echo "INFO : can commit because 'merge' or 'feature branch' keyword exists."
+    exit 0
+fi
+
+jira_num=$(grep -ohE -m 1 '[ABCDEFGHIJKLMNOPQRSTUVWXYZ0-9]+-[0-9]+' "$1" | head -1)
+if [ "${jira_num}" == "" ];then
+    echo "ERROR : commit does not contains JIRA_NUM. for example: PROJ-123"
+    exit 1
+fi
+check_url=${JIRA_API_ISSUE_URL}${jira_num}
+http_response=$(curl -m ${TIME_OUT} --write-out %{http_code} --silent --output /dev/null ${check_url})
+
+if [ ${HARD_MODE} == "true" ];then
+    if [ "$http_response" -eq "401" ]; then
+        # echo "INFO : can find jira issue number, allow commit";
+        exit 0;
+    else
+        echo "ERROR : can not find the jira issue num:${jira_num}, please check: ${check_url}";
+        exit 1;
+    fi
+else
+    if [ "$http_response" -eq "404" ]; then
+        echo "ERROR : can not find the jira issue num:${jira_num}, please check: ${check_url}";
+        exit 2;
+    elif [ "$http_response" -eq "000" ]; then
+        echo "WARN : request time out or error occured, url:${check_url}, but allow commit in loose mode.";
+        exit 0;
+    else
+        # echo "INFO : http response:${http_response}, not 404, allow commit. url: ${check_url}";
+        exit 0;
+    fi
+fi
